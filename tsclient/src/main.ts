@@ -10,35 +10,52 @@ try{
 	const client:Socket = net.createConnection({ port: PORT, host: HOST });
 
 	client.on("error", 
+		
 		(err: NodeJS.ErrnoException)=>{
+			
 			if (err.errno == -4078){
+			
 				console.error("Connection refused")
+				
 				return
 			}
+			
 			console.error(err.code)
 		}
+	
 	);
 	
 	
 	client.on("connect", 
-		()=>
+		
+		async ()=>
 		{
-			if (Game.instance.start(PORT,HOST, client) == GameStatus.EXIT){
+			if (await Game.instance.start(PORT,HOST, client) == GameStatus.EXIT){
 				//client.end()
 			}
 		}
 	);
 	
-	client.on("data", (data)=>{
+	client.on("data", async (data)=>{
 
-		console.log("ACCIONES")
 		let response= JSON.parse(data.toString("utf-8").replace(/\n/g, ""));	
 		
-		console.log(response.action)
-	})
 
+		//probably its better a switch sentence, a repository pattern is to much
+		if (response.action == "login_ok"){
+			
+			Game.instance.setSessionToken(response.session_token, PORT, HOST)
+			await Game.instance.start(PORT,HOST,client)	
+		}
+		
+		 
+		
+
+	})
 	
 
 }catch(err){
+	
 	console.error("Unhandled error:", err);
+
 }

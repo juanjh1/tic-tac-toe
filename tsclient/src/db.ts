@@ -1,4 +1,18 @@
+import { resolve } from 'node:path';
 import sqlite3 from 'sqlite3';
+
+interface ServerRow {
+  id: number;
+  ip: string;
+  port: number;
+  sesion: string | null;
+}
+
+
+interface SessionRow{
+  sesion: string | null;
+}
+
 
 
 export class Database{
@@ -38,12 +52,16 @@ export class Database{
 
 	#createHost(port: number, host: string): void {
 		
-		this.#db.run("SELECT * FROM servers where ip=? and port=?",[host, port], 
-			(result: sqlite3.RunResult, error: Error|null) => {
+		this.#db.get<ServerRow>("SELECT * FROM servers where ip=? AND port=?",[host, port], 
+			
+			( error: Error|null, row) => {
 				
-				if(!result){
+				if(!row){
+					
 					this.#db.run("INSERT INTO servers (ip, port) values (?,?)",[host, port])	
 				}
+				
+				console.log(`\n\n\n${row}\n\n\n`)
 				
 				if(error){
 					console.error(error);
@@ -53,27 +71,108 @@ export class Database{
 		);
 	}
 	
-
-	searchUser(port: number, host: string): boolean {
+	async getTokenUser(port: number, host: string):Promise<string | undefined> {
 		
-		let isAutenticated: boolean = false
 		this.#createHost(port, host);
 		
-		this.#db.run("SELECT port FROM servers where ip=? and port=?",[host, port], 
-			
-			(result: sqlite3.RunResult, error: Error|null) => {
-				if(result){
-					isAutenticated = true;
-				}
-				console.log(`result: {result}`)	
-				if (error){
-					console.error(error)
-				}
-			}
-		)
+		const token : SessionRow | undefined = await new Promise< SessionRow | undefined >((res, rej) => {
 
-	        return isAutenticated;
+			this.#db.get<SessionRow>("SELECT sesion FROM servers where ip=? and port=?",[host, port], 
+			
+				( error: Error|null, row) => {
+				
+					res(row)	
+					
+					if (error){
+						
+						rej(error)
+					
+					}
+				}
+			)
+
+		})
+		
+	        return token.sesion;
 	}
+
+
+	async searchTokenUser(port: number, host: string):Promise<boolean> {
+		
+		this.#createHost(port, host);
+		
+		const ok : SessionRow | undefined = await new Promise< SessionRow | undefined >((res, rej) => {
+
+			this.#db.get<SessionRow>("SELECT sesion FROM servers where ip=? and port=?",[host, port], 
+			
+				( error: Error|null, row) => {
+				
+					res(row)	
+					
+					if (error){
+						
+						rej(error)
+					
+					}
+				}
+			)
+
+		})
+			
+	        return ok?.sesion != null? true: false;
+	}
+	
+
+	async setSessionToken(token:string, port:number, host: string): Promise<void>{
+		
+		try{
+			await new Promise ((res, rej) => {
+				
+				this.#db.run("UPDATE servers SET sesion=? where ip=? and port=? ",[token, host, port], 
+						
+					(error:Error|null)=>{
+					
+						if(error){
+						
+							rej(error.message)
+						}
+					}
+				)
+
+			})
+		}catch(error){
+		
+			console.error(error)
+		
+		}
+	}
+
+	async deleteSessionToken(token:string, port:number, host: string): Promise<void>{
+		
+		try{
+			await new Promise ((res, rej) => {
+				
+				this.#db.run("UPDATE servers SET sesion=NULL where ip=? and port=? ",[host, port], 
+						
+					(error:Error|null)=>{
+					
+						if(error){
+						
+							rej(error.message)
+						}
+					}
+				)
+
+			})
+		}catch(error){
+		
+			console.error(error)
+		
+		}
+	}
+
+
+
 
 }
 

@@ -234,13 +234,48 @@ def login_func(msg, wfile, fileno, addr, conn)-> bool:
                     pass
                 finally:
                     return False
+            
+            
             session_token = secrets.token_urlsafe(32)
             clients[user] = {"conn": conn, "addr": addr, "wfile": wfile, "fileno": fileno, "token":session_token}
             conns[fileno] = user
             users[user] = {"password":users[user].get("password"), "session_token":session_token}
-        send_json_writer(wfile, {"action": "login_ok","session_token":session_token})
+            snapshot = users.copy()
+
+        persist_users_atomic(snapshot)
+        send_json_writer(wfile, {"action": "login_ok", "session_token":session_token})
+        
         #notify_online() 
+        
         return True
+
+
+
+def connect (msg, wfile, username)-> bool:
+
+        _token    : str  = msg.get("session_token")
+        _username : str  = msg.get("username")
+
+        if _username == username:
+            return False
+        
+        if users.get(_username) is not None:
+            
+            send_json_writer(wfile, {"action": "re_register"})
+            
+            return False
+
+
+        if  _token != users.get(_username).get("session_token"):
+            
+            send_json_writer(wfile, {"action": "re_login"})
+            
+            return False
+        
+        username = _username
+        
+        return True
+
 
 
 def list_func(wfile)->None:
@@ -250,6 +285,7 @@ def list_func(wfile)->None:
         online = list(clients.keys())
             
         send_json_writer(wfile, {"action": "list", "users": online})
+
 
 def invite_func(msg:dict, wfile)-> bool:
 
@@ -323,6 +359,8 @@ def invite_response_func(msg, wfile) -> bool:
         broadcast_to_players(gid, {"action": "update", "game_id": gid, "board": board, "turn": "X"})
     
     return False
+
+
 
 def move_func(msg, wfile, fileno) -> bool:
 
@@ -472,6 +510,12 @@ def handle_client(conn, addr):
                 
                 continue  
             
+            #___________________ Connect ___________________
+            
+            if action == "connect" and not connect(msg,wfile,username):
+                
+                continue
+
             # ------------------ LOGOUT ------------------
             
             if action == "logout":
@@ -479,6 +523,7 @@ def handle_client(conn, addr):
                 if username:
                     
                     with lock:
+                        
                         try:
                             
                             del conns[clients[username]["fileno"]]
@@ -495,7 +540,8 @@ def handle_client(conn, addr):
                             pass
                     
                     send_json_writer(wfile, {"action": "logout_ok"})
-                    notify_online()
+                    
+                    #notify_online()
                     break
 
             if action not in ["login", "register", "logout", "move", "invite", "invite_response"]:
@@ -522,7 +568,8 @@ def handle_client(conn, addr):
                         del clients[username]
                     except Exception:
                         pass
-                notify_online()
+            #notify_online()
+        
         except Exception:
             pass
         try:
