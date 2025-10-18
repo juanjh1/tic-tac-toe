@@ -1,3 +1,5 @@
 export enum GameStatus{
-	EXIT
+	EXIT,
+	NOTHING,
+	AUTH
 }

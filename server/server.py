@@ -2,25 +2,30 @@ import socket
 import threading
 import json
 import hashlib
+from typing import DefaultDict
 import uuid
 import os
 import traceback
 import secrets
+import inspect
 
 
 USERS_FILE = "users.json"
-HOST = "127.0.0.1"
+HOST = "0.0.0.0"
 PORT = 5000
 
 lock = threading.Lock()
 
 # In-memory state
-# users: username -> password_hash (loaded at startup)
-users = {}
+# users: username -> {password_hash , session_token}(loaded at startup)
+users: dict[str, dict[str,str]] = {}
+
 # clients: username -> {conn, addr, wfile, fileno}
 clients = {}   
+
 # conns: fileno -> username
 conns = {}
+
 # games
 games = {}
 
@@ -148,6 +153,44 @@ def notify_online():
 """
 # -------------------- Client handler --------------------
 
+def validate_token(func):
+    
+    
+    def wrapper(*args, **kwargs)-> bool:
+        
+        sig = inspect.signature(func)
+
+        bound = sig.bind_partial(*args, **kwargs)
+        
+        bound.apply_defaults()
+        
+        if "msg" not in bound.arguments:
+            
+            return False
+        
+        request = bound.arguments["msg"]
+        
+        token : str  = request.get("session_token")
+        
+        status = False
+        
+        for user, info in users.items():
+            
+            if info.get("session_token") == token:
+                
+                status = True        
+        
+        if not status:
+            
+            return False
+        
+        func(*args, **kwargs)
+        
+        return True
+
+    return wrapper 
+
+
 def register_func(msg, wfile)-> bool:
         user = msg.get("username")
         pw = msg.get("password")
@@ -203,38 +246,7 @@ def login_func(msg, wfile, fileno, addr, conn)-> bool:
             prev = clients.get(user)
             
             if prev:
-                
-                try:
-                    
-                    prev_conn = prev.get("conn")
-                    prev_w = prev.get("wfile")
-                    send_json_writer(prev_w, {"action": "kicked", "reason": "login elsewhere"})
-                
-                    try:
-                        prev_conn.shutdown(socket.SHUT_RDWR)
-                    
-                    except Exception:
-                        pass
-                    
-                    try:
-                        prev_conn.close()
-                    
-                    except Exception:
-                        pass
-                    
-                    try:
-                        del conns[prev.get("fileno")]
-                    
-                    except Exception:
-                        
-                        pass
-                
-                except Exception:
-                    
-                    pass
-                finally:
-                    return False
-            
+               return kick_connection(prev)
             
             session_token = secrets.token_urlsafe(32)
             clients[user] = {"conn": conn, "addr": addr, "wfile": wfile, "fileno": fileno, "token":session_token}
@@ -243,6 +255,7 @@ def login_func(msg, wfile, fileno, addr, conn)-> bool:
             snapshot = users.copy()
 
         persist_users_atomic(snapshot)
+        
         send_json_writer(wfile, {"action": "login_ok", "session_token":session_token})
         
         #notify_online() 
@@ -251,35 +264,80 @@ def login_func(msg, wfile, fileno, addr, conn)-> bool:
 
 
 
-def connect (msg, wfile, username)-> bool:
+def kick_connection (prev):
+    
+    try:
+        
+        prev_conn = prev.get("conn")
+        prev_w = prev.get("wfile")
+        send_json_writer(prev_w, {"action": "kicked", "reason": "login elsewhere"})
+    
+        try:
+            prev_conn.shutdown(socket.SHUT_RDWR)
+        
+        except Exception:
+            pass
+        
+        try:
+            prev_conn.close()
+        
+        except Exception:
+            pass
+        
+        try:
+            del conns[prev.get("fileno")]
+        
+        except Exception:
+            
+            pass
+    
+    except Exception:
+        
+        pass
+    finally:
+        
+        return False
+
+
+def connect (msg, wfile, fileno, addr, conn)-> tuple[bool, str]:
 
         _token    : str  = msg.get("session_token")
-        _username : str  = msg.get("username")
-
-        if _username == username:
-            return False
         
-        if users.get(_username) is not None:
+        _username = None
+        
+        for user_name,info  in users.items():
             
-            send_json_writer(wfile, {"action": "re_register"})
+            print(info, _token) 
             
-            return False
+            if info.get("session_token") == _token :
+                
+                _username = user_name
+       
+        print(_username)
 
-
-        if  _token != users.get(_username).get("session_token"):
+        
+        if _username is None:
             
             send_json_writer(wfile, {"action": "re_login"})
+
+            return False,""
+
+        if _username is not clients.keys():
             
-            return False
-        
-        username = _username
-        
-        return True
+            prev = clients.get(_username) 
+            
+            if prev:
+               return kick_connection(prev), ""
+     
+
+            clients[_username] = {"conn": conn, "addr": addr, "wfile": wfile, "fileno": fileno, "token":_token}
+
+        return True, _username
 
 
-
-def list_func(wfile)->None:
-        
+@validate_token
+def list_func(wfile, msg)->None:
+    
     with lock:
                 
         online = list(clients.keys())
@@ -405,6 +463,7 @@ def move_func(msg, wfile, fileno) -> bool:
             return False
         
         if g["board"][x][y] != " ":
+            
             send_json_writer(wfile, {"action": "error", "reason": "cell occupied"})
             
             return False
@@ -490,7 +549,7 @@ def handle_client(conn, addr):
             
             if action == "list":
                 
-                list_func(wfile)    
+                list_func(wfile,msg)    
 
             # ------------------ INVITE ------------------
             
@@ -512,16 +571,31 @@ def handle_client(conn, addr):
             
             #___________________ Connect ___________________
             
-            if action == "connect" and not connect(msg,wfile,username):
+            if action == "connection":
                 
-                continue
-
+                state, user_name = connect(msg,wfile,fileno,addr,conn)
+                
+                if not state:
+                    continue
+  
+                username = user_name 
+               
             # ------------------ LOGOUT ------------------
             
             if action == "logout":
+                token = msg.get("session_token")
                 
+                if (token is None):
+                    send_json_writer(wfile, {"action": "logout_bad", "reason":"no_token"})
+                    continue 
+                    
+                print(username) 
                 if username:
                     
+                    if  users.get(username).get("session_token") != token:
+                            send_json_writer(wfile, {"action": "logout_bad", "reason":"invalid_session"}) 
+                            continue
+                
                     with lock:
                         
                         try:
@@ -539,12 +613,16 @@ def handle_client(conn, addr):
                             
                             pass
                     
+                    users.get(username)["session_token"] = ""
+                    snapshot = users.copy()
+                    
+                    persist_users_atomic(snapshot) 
                     send_json_writer(wfile, {"action": "logout_ok"})
                     
                     #notify_online()
                     break
 
-            if action not in ["login", "register", "logout", "move", "invite", "invite_response"]:
+            if action not in ["login", "register", "logout", "move", "invite", "invite_response", "connection","list"]:
                 
                 send_json_writer(wfile, {"action": "error", "reason": "unknown action"})
 

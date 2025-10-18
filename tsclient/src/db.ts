@@ -40,6 +40,7 @@ export class Database{
 	#createServerTable(){
 		
 		this.#db.run(`
+
 			CREATE TABLE IF NOT EXISTS servers(
 			 id INTEGER PRIMARY KEY AUTOINCREMENT,
 			 ip varchar(15)NOT NULL,
@@ -50,23 +51,37 @@ export class Database{
 
 	}
 
-	#createHost(port: number, host: string): void {
+	async #createHost(port: number, host: string): Promise<void> {
 		
-		this.#db.get<ServerRow>("SELECT * FROM servers where ip=? AND port=?",[host, port], 
-			
-			( error: Error|null, row) => {
-				
-				if(!row){
+
+		await new Promise<void>(
+		   async (res, rej)=>	{
+				this.#db.get<ServerRow>("SELECT * FROM servers where ip=? AND port=?",[host, port], 
 					
-					this.#db.run("INSERT INTO servers (ip, port) values (?,?)",[host, port])	
-				}
-				
-				console.log(`\n\n\n${row}\n\n\n`)
-				
-				if(error){
-					console.error(error);
-				}
-				return;
+					( error: Error|null, row) => {
+						
+						if(!row){
+							
+							this.#db.run(
+								"INSERT INTO servers (ip, port) values (?,?)",
+								[host, port], 
+								(err)=>
+								{
+									 if(err){
+										rej(err)
+									}
+
+									res()
+								}
+							)
+						}else{
+							res()
+						}
+						
+						
+						rej(error);
+					}
+				);
 			}
 		);
 	}
@@ -93,13 +108,13 @@ export class Database{
 
 		})
 		
-	        return token.sesion;
+	        return Promise.resolve( token.sesion);
 	}
 
 
 	async searchTokenUser(port: number, host: string):Promise<boolean> {
 		
-		this.#createHost(port, host);
+		await this.#createHost(port, host);
 		
 		const ok : SessionRow | undefined = await new Promise< SessionRow | undefined >((res, rej) => {
 
@@ -147,7 +162,7 @@ export class Database{
 		}
 	}
 
-	async deleteSessionToken(token:string, port:number, host: string): Promise<void>{
+	async deleteSessionToken(port:number, host: string): Promise<void>{
 		
 		try{
 			await new Promise ((res, rej) => {
@@ -170,9 +185,6 @@ export class Database{
 		
 		}
 	}
-
-
-
 
 }
 

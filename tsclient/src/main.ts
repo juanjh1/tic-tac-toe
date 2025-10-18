@@ -2,6 +2,7 @@ import net,{Socket } from "node:net";
 import { Game} from "./game.js";
 import { GameStatus } from "./enums/GameStatus.js";
 import { json } from "node:stream/consumers";
+import { getRandomValues } from "node:crypto";
 
 
 const PORT: number = 5000;
@@ -30,8 +31,19 @@ try{
 		
 		async ()=>
 		{
-			if (await Game.instance.start(PORT,HOST, client) == GameStatus.EXIT){
-				//client.end()
+			
+			let game : GameStatus = await Game.instance.runClient(PORT,HOST, client)
+			
+			console.debug(`connect -> status${game}`)
+
+			if ( game == GameStatus.EXIT){
+				
+				client.end()
+			
+			}
+
+			if(game == GameStatus.NOTHING){
+			
 			}
 		}
 	);
@@ -40,16 +52,18 @@ try{
 
 		let response= JSON.parse(data.toString("utf-8").replace(/\n/g, ""));	
 		
+		let game : GameStatus = await Game.instance.runClient(PORT,HOST,client,response)
+		
+		console.debug(`data -> status${game}`)
+		
+		if ( game == GameStatus.EXIT){
 
-		//probably its better a switch sentence, a repository pattern is to much
-		if (response.action == "login_ok"){
+			console.error("sali")	
 			
-			Game.instance.setSessionToken(response.session_token, PORT, HOST)
-			await Game.instance.start(PORT,HOST,client)	
+			client.end()
 		}
-		
-		 
-		
+
+		if(game == GameStatus.NOTHING){}
 
 	})
 	
